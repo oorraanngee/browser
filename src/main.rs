@@ -23,8 +23,6 @@ use tokio::time::timeout;
 use wry::dpi::{LogicalPosition, LogicalSize};
 use wry::{Rect, WebView, WebViewBuilder, WebViewBuilderExtWindows};
 
-const TOOLBAR_H: f64 = 96.0;
-
 // ------------------------------------------------------------------ адреса ---
 
 #[derive(Clone)]
@@ -387,35 +385,89 @@ async fn build_report(src: &Source) -> String {
 
 // --------------------------------------------------------------------- UI ---
 
-const TOOLBAR_HTML: &str = r#"<!doctype html><meta charset="utf-8">
+const BAR_H: f64 = 52.0;
+
+const MENU_HTML: &str = r#"<!doctype html><meta charset="utf-8">
 <style>
- html,body{margin:0;font:13px Segoe UI,sans-serif;background:#202124;color:#e8eaed;overflow:hidden}
- .row{display:flex;gap:6px;padding:6px 8px;align-items:center}
- button,input,select{background:#35363a;color:#e8eaed;border:1px solid #5f6368;border-radius:6px;padding:5px 9px;font:inherit}
- button:hover{background:#45464a} input{flex:1;min-width:0} select{flex:1;min-width:0}
- #st{padding:0 10px 4px;font-size:12px;color:#9aa0a6;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+ :root{color-scheme:dark}
+ *{box-sizing:border-box}
+ html,body{margin:0;height:100%;font:14px "Segoe UI",system-ui,sans-serif;background:#16171a;color:#e8eaed;overflow:hidden}
+ button,input{font:inherit;color:inherit;background:#2b2d31;border:1px solid #4a4d55;border-radius:8px;padding:7px 12px}
+ button{cursor:pointer} button:hover:not(:disabled){background:#383b41} button:disabled{opacity:.4;cursor:default}
+ button.pri{background:#2f6fed;border-color:#2f6fed;color:#fff} button.pri:hover:not(:disabled){background:#4a82f0}
+ body.menu #bar{display:none} body.browse #menu{display:none}
+ #bar{display:flex;gap:6px;align-items:center;padding:8px 10px;height:52px;background:#202124}
+ #nav{display:flex;flex:1;min-width:0} #url{flex:1;min-width:0}
+ #chip{white-space:nowrap;max-width:320px;overflow:hidden;text-overflow:ellipsis}
+ #menu{height:100%;display:flex;justify-content:center;padding:28px 20px 18px}
+ #wrap{width:100%;max-width:780px;display:flex;flex-direction:column;min-height:0}
+ h1{margin:0 0 4px;font-size:26px;font-weight:600} .sub{color:#9aa0a6;margin-bottom:14px}
+ #list{flex:1;min-height:0;overflow:auto;display:flex;flex-direction:column;gap:8px;padding:2px}
+ .card{padding:12px 14px;border:1px solid #3c3f46;border-radius:10px;background:#1e2024;cursor:pointer}
+ .card:hover{border-color:#6b7280} .card.on{border-color:#2f6fed;background:#1c2a44;box-shadow:0 0 0 1px #2f6fed}
+ .ip{font-size:16px;font-weight:600} .v6{font:12px Consolas,monospace;color:#9aa0a6;margin-left:8px}
+ .tag{display:inline-block;margin-top:6px;padding:2px 8px;border-radius:999px;font-size:12px;background:#22392a;color:#9be3a2}
+ .tag.vpn{background:#3d2f12;color:#f3c767} .tag.virt{background:#2d2f35;color:#aab0bb} .tag.bad{background:#40201f;color:#f2958f}
+ .nm{color:#9aa0a6;font-size:12px;margin-top:4px}
+ #foot{display:flex;gap:8px;align-items:center;margin-top:12px} #foot .sp{flex:1}
+ #msg{color:#9aa0a6;font-size:12px;margin-top:8px;min-height:16px}
+ #ov{display:none;position:fixed;left:0;top:0;right:0;bottom:0;background:rgba(0,0,0,.6);align-items:center;justify-content:center;padding:20px}
+ #ov div{background:#202124;border:1px solid #4a4d55;border-radius:12px;padding:16px;max-width:680px;width:100%}
+ #ov pre{white-space:pre-wrap;margin:0 0 12px;font:13px Consolas,monospace}
 </style>
-<form id="go" class="row">
- <button type="button" id="back">←</button><button type="button" id="fwd">→</button>
- <button type="button" id="rel">⟳</button><input id="url" placeholder="Адрес или URL" spellcheck="false">
-</form>
-<div class="row"><span>Исходящий адрес:</span><select id="sel"></select>
- <button id="rf">Обновить</button><button id="chk">Проверка IP</button></div>
-<div id="st"></div>
+<body class="menu">
+<div id="menu"><div id="wrap">
+ <h1>Bound Browser</h1>
+ <div class="sub">Выбери адрес, с которого браузер будет выходить в сеть. Пока адрес не выбран, сеть закрыта.</div>
+ <div id="list"></div>
+ <div id="foot">
+  <button id="rf">Обновить список</button><button id="chk">Проверка IP</button><span class="sp"></span>
+  <button id="launch" class="pri" disabled>Открыть браузер →</button>
+ </div>
+ <div id="msg"></div>
+</div></div>
+<div id="bar">
+ <button id="back">←</button><button id="fwd">→</button><button id="rel">⟳</button>
+ <form id="nav"><input id="url" placeholder="Адрес или URL" spellcheck="false"></form>
+ <button id="chk2">Проверка IP</button><button id="chip" title="Сменить адрес"></button>
+</div>
+<div id="ov"><div><pre id="rep"></pre><button id="ovx" class="pri">Закрыть</button></div></div>
 <script>
- const ipc=m=>window.ipc.postMessage(m), $=i=>document.getElementById(i);
- $('go').onsubmit=e=>{e.preventDefault();ipc('nav|'+$('url').value)};
- $('back').onclick=()=>ipc('back');$('fwd').onclick=()=>ipc('fwd');$('rel').onclick=()=>ipc('rel');
- $('rf').onclick=()=>ipc('refresh');$('chk').onclick=()=>ipc('check');
- $('sel').onchange=()=>ipc('pick|'+$('sel').value);
- function setAddrs(list,sel){const s=$('sel');s.innerHTML='';
-  const o=document.createElement('option');o.value=-1;o.textContent='— выберите адрес (пока не выбран, сеть закрыта) —';s.appendChild(o);
-  list.forEach((t,i)=>{const e=document.createElement('option');e.value=i;e.textContent=t;s.appendChild(e)});
-  s.value=sel;}
+ const $=i=>document.getElementById(i);
+ const ipc=m=>{ if(window.ipc) window.ipc.postMessage(m); else $('msg').textContent='IPC недоступен'; };
+ let SRC=[],SEL=-1;
+ function render(){
+  const box=$('list'); box.innerHTML='';
+  SRC.forEach((s,i)=>{
+   const d=document.createElement('div'); d.className='card'+(i===SEL?' on':'');
+   const a=document.createElement('div');
+   const ip=document.createElement('span'); ip.className='ip'; ip.textContent=s.v4||s.v6; a.appendChild(ip);
+   if(s.v4&&s.v6){const v=document.createElement('span'); v.className='v6'; v.textContent='+ '+s.v6; a.appendChild(v);}
+   const t=document.createElement('span'); t.className='tag '+(s.label.startsWith('VPN')?'vpn':s.label.startsWith('виртуальный')?'virt':s.label.startsWith('169')?'bad':'');
+   t.textContent=s.label;
+   const n=document.createElement('div'); n.className='nm'; n.textContent=s.name;
+   d.appendChild(a); d.appendChild(t); d.appendChild(n);
+   d.onclick=()=>{SEL=i; ipc('pick|'+i); render();};
+   d.ondblclick=()=>ipc('launch');
+   box.appendChild(d);
+  });
+  $('launch').disabled=SEL<0;
+  $('msg').textContent=SRC.length?('Найдено адресов: '+SRC.length):'Подходящих адресов не найдено. Нажми «Обновить список».';
+ }
+ function setAddrs(list,sel){SRC=list;SEL=sel;render();}
+ function setMode(m,chip,full){document.body.className=m;$('chip').textContent=chip||'';$('chip').title=full||'';if(m==='browse')$('url').focus();}
+ function setMsg(t){$('msg').textContent=t}
  function setUrl(u){$('url').value=u}
- function setStatus(t){$('st').textContent=t}
- function showReport(t){alert(t)}
- ipc('ready');
+ function showReport(t){ if(document.body.className==='menu'){$('rep').textContent=t;$('ov').style.display='flex';} else alert(t); }
+ $('ovx').onclick=()=>{$('ov').style.display='none'};
+ $('rf').onclick=()=>ipc('refresh'); $('chk').onclick=()=>ipc('check'); $('chk2').onclick=()=>ipc('check');
+ $('launch').onclick=()=>ipc('launch'); $('chip').onclick=()=>ipc('menu');
+ $('back').onclick=()=>ipc('back'); $('fwd').onclick=()=>ipc('fwd'); $('rel').onclick=()=>ipc('rel');
+ $('nav').onsubmit=e=>{e.preventDefault();ipc('nav|'+$('url').value)};
+ window.addEventListener('error',e=>{$('msg').textContent='JS: '+e.message});
+ const INIT=/*INIT*/null;
+ setAddrs(INIT||[],-1);
+ (function boot(){ if(window.ipc) ipc('ready'); else setTimeout(boot,50); })();
 </script>"#;
 
 enum UserEvent {
@@ -428,41 +480,38 @@ fn js(s: &str) -> String {
     serde_json::to_string(s).unwrap()
 }
 
-fn layout(window: &Window, tb: &WebView, ct: &WebView) {
+fn layout(window: &Window, tb: &WebView, ct: &WebView, menu: bool) {
     let s = window.inner_size().to_logical::<f64>(window.scale_factor());
+    let tb_h = if menu { s.height.max(1.0) } else { BAR_H };
     let _ = tb.set_bounds(Rect {
         position: LogicalPosition::new(0.0, 0.0).into(),
-        size: LogicalSize::new(s.width, TOOLBAR_H).into(),
+        size: LogicalSize::new(s.width, tb_h).into(),
     });
     let _ = ct.set_bounds(Rect {
-        position: LogicalPosition::new(0.0, TOOLBAR_H).into(),
-        size: LogicalSize::new(s.width, (s.height - TOOLBAR_H).max(1.0)).into(),
+        position: LogicalPosition::new(0.0, BAR_H).into(),
+        size: LogicalSize::new(s.width, (s.height - BAR_H).max(1.0)).into(),
     });
+}
+
+fn sources_json(sources: &[Source]) -> serde_json::Value {
+    serde_json::Value::Array(
+        sources
+            .iter()
+            .map(|s| {
+                serde_json::json!({
+                    "v4": s.v4.map(|a| a.to_string()),
+                    "v6": s.v6.map(|a| a.to_string()),
+                    "name": s.name,
+                    "label": s.label,
+                })
+            })
+            .collect(),
+    )
 }
 
 fn push_addrs(tb: &WebView, sources: &[Source], selected: Option<usize>) {
-    let titles: Vec<String> = sources.iter().map(|s| s.title()).collect();
     let sel = selected.map(|i| i as i64).unwrap_or(-1);
-    let _ = tb.evaluate_script(&format!(
-        "setAddrs({},{})",
-        serde_json::to_string(&titles).unwrap(),
-        sel
-    ));
-}
-
-fn push_status(tb: &WebView, src: Option<&Source>) {
-    let t = match src {
-        None => "🔒 Сеть закрыта: адрес не выбран".to_string(),
-        Some(s) => format!(
-            "🟢 {} · IPv4 {} · IPv6 {} · привязка к интерфейсу (idx {}/{}) · при ошибке соединения закрываются",
-            s.name,
-            s.v4.map(|a| a.to_string()).unwrap_or("—".into()),
-            s.v6.map(|a| a.to_string()).unwrap_or("—".into()),
-            s.idx4,
-            s.idx6
-        ),
-    };
-    let _ = tb.evaluate_script(&format!("setStatus({})", js(&t)));
+    let _ = tb.evaluate_script(&format!("setAddrs({},{})", sources_json(sources), sel));
 }
 
 fn main() {
@@ -492,6 +541,11 @@ fn main() {
          --disable-features=msSmartScreenProtection,msWebOOUI,msPdfOOUI"
     );
 
+    // Список адресов зашиваем прямо в HTML: меню не зависит от IPC при старте.
+    let mut sources: Vec<Source> = list_sources();
+    let init = sources_json(&sources).to_string().replace("</", "<\\/");
+    let html = MENU_HTML.replace("/*INIT*/null", &init);
+
     let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
     let proxy = event_loop.create_proxy();
     let window = WindowBuilder::new()
@@ -500,15 +554,15 @@ fn main() {
         .build(&event_loop)
         .unwrap();
 
-    let init = window.inner_size().to_logical::<f64>(window.scale_factor());
+    let init_size = window.inner_size().to_logical::<f64>(window.scale_factor());
     let p_ipc = proxy.clone();
     let toolbar = WebViewBuilder::new()
         .with_bounds(Rect {
             position: LogicalPosition::new(0.0, 0.0).into(),
-            size: LogicalSize::new(init.width, TOOLBAR_H).into(),
+            size: LogicalSize::new(init_size.width, init_size.height.max(1.0)).into(),
         })
         .with_additional_browser_args(args.clone())
-        .with_html(TOOLBAR_HTML)
+        .with_html(html)
         .with_ipc_handler(move |req| {
             let _ = p_ipc.send_event(UserEvent::Ipc(req.body().clone()));
         })
@@ -518,8 +572,8 @@ fn main() {
     let p_nav = proxy.clone();
     let content = WebViewBuilder::new()
         .with_bounds(Rect {
-            position: LogicalPosition::new(0.0, TOOLBAR_H).into(),
-            size: LogicalSize::new(init.width, (init.height - TOOLBAR_H).max(1.0)).into(),
+            position: LogicalPosition::new(0.0, BAR_H).into(),
+            size: LogicalSize::new(init_size.width, (init_size.height - BAR_H).max(1.0)).into(),
         })
         .with_additional_browser_args(args)
         .with_url("about:blank")
@@ -530,15 +584,19 @@ fn main() {
         })
         .build_as_child(&window)
         .unwrap();
+    let _ = content.set_visible(false); // сначала меню выбора, браузер скрыт
 
-    let mut sources: Vec<Source> = Vec::new();
     let mut selected: Option<usize> = None;
+    let mut menu = true;
+    let mut launched = false;
 
     event_loop.run(move |event, _, flow| {
         *flow = ControlFlow::Wait;
         match event {
             Event::WindowEvent { event: WindowEvent::CloseRequested, .. } => *flow = ControlFlow::Exit,
-            Event::WindowEvent { event: WindowEvent::Resized(_), .. } => layout(&window, &toolbar, &content),
+            Event::WindowEvent { event: WindowEvent::Resized(_), .. } => {
+                layout(&window, &toolbar, &content, menu)
+            }
             Event::UserEvent(UserEvent::Url(u)) => {
                 let _ = toolbar.evaluate_script(&format!("setUrl({})", js(&u)));
             }
@@ -552,19 +610,47 @@ fn main() {
                         let prev = selected.map(|i| sources[i].clone());
                         sources = list_sources();
                         selected = prev.and_then(|p| sources.iter().position(|s| s.same_as(&p)));
-                        *state.lock().unwrap() = selected.map(|i| sources[i].clone());
-                        gen_tx.send_modify(|g| *g += 1);
                         push_addrs(&toolbar, &sources, selected);
-                        push_status(&toolbar, selected.map(|i| &sources[i]));
                     }
                     "pick" => {
                         selected = arg.parse::<usize>().ok().filter(|i| *i < sources.len());
-                        *state.lock().unwrap() = selected.map(|i| sources[i].clone());
-                        gen_tx.send_modify(|g| *g += 1);
-                        push_status(&toolbar, selected.map(|i| &sources[i]));
-                        if selected.is_some() {
-                            let _ = content.evaluate_script("location.reload()");
+                    }
+                    "launch" => match selected {
+                        Some(i) => {
+                            let s = sources[i].clone();
+                            *state.lock().unwrap() = Some(s.clone());
+                            gen_tx.send_modify(|g| *g += 1);
+                            menu = false;
+                            layout(&window, &toolbar, &content, menu);
+                            let _ = content.set_visible(true);
+                            let ip = s
+                                .v4
+                                .map(|a| a.to_string())
+                                .or(s.v6.map(|a| a.to_string()))
+                                .unwrap_or_default();
+                            let kind = s.label.split(',').next().unwrap_or("").to_string();
+                            let _ = toolbar.evaluate_script(&format!(
+                                "setMode('browse',{},{})",
+                                js(&format!("🟢 {ip} · {kind}")),
+                                js(&format!("{}\nНажми, чтобы сменить адрес", s.title()))
+                            ));
+                            if launched {
+                                let _ = content.evaluate_script("location.reload()");
+                            }
+                            launched = true;
                         }
+                        None => {
+                            let _ = toolbar.evaluate_script("setMsg('Сначала выбери адрес.')");
+                        }
+                    },
+                    "menu" => {
+                        // возвращаясь в меню, закрываем сеть (fail-closed) и рвём соединения
+                        *state.lock().unwrap() = None;
+                        gen_tx.send_modify(|g| *g += 1);
+                        menu = true;
+                        let _ = content.set_visible(false);
+                        layout(&window, &toolbar, &content, menu);
+                        let _ = toolbar.evaluate_script("setMode('menu','','')");
                     }
                     "nav" => {
                         let mut u = arg.trim().to_string();
@@ -573,13 +659,21 @@ fn main() {
                         }
                         let _ = content.load_url(&u);
                     }
-                    "back" => { let _ = content.evaluate_script("history.back()"); }
-                    "fwd" => { let _ = content.evaluate_script("history.forward()"); }
-                    "rel" => { let _ = content.evaluate_script("location.reload()"); }
+                    "back" => {
+                        let _ = content.evaluate_script("history.back()");
+                    }
+                    "fwd" => {
+                        let _ = content.evaluate_script("history.forward()");
+                    }
+                    "rel" => {
+                        let _ = content.evaluate_script("location.reload()");
+                    }
                     "check" => match selected {
                         Some(i) => {
                             let src = sources[i].clone();
-                            let _ = content.load_url("https://api64.ipify.org/");
+                            if !menu {
+                                let _ = content.load_url("https://api64.ipify.org/");
+                            }
                             let p = proxy.clone();
                             rt_handle.spawn(async move {
                                 let r = build_report(&src).await;
@@ -587,7 +681,7 @@ fn main() {
                             });
                         }
                         None => {
-                            let _ = toolbar.evaluate_script("showReport('Сначала выбери адрес.')");
+                            let _ = toolbar.evaluate_script("setMsg('Сначала выбери адрес.')");
                         }
                     },
                     _ => {}
