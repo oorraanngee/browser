@@ -1,0 +1,18 @@
+[package]
+name = "bound-browser"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+wry = "0.53"
+tao = "0.34"
+tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "time", "sync", "macros"] }
+serde_json = "1"
+ipconfig = "0.3"
+windows-sys = { version = "0.59", features = ["Win32_Networking_WinSock"] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+codegen-units = 1
