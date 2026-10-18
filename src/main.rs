@@ -107,6 +107,44 @@ fn best_v6(ips: &[IpAddr]) -> Option<Ipv6Addr> {
         .copied()
 }
 
+/// Индекс интерфейса (IfIndex) по GUID адаптера вида "{XXXXXXXX-XXXX-...}".
+/// ipconfig::Adapter отдаёт только Ipv6IfIndex, который = 0, если IPv6 на адаптере выключен.
+fn guid_to_index(name: &str) -> u32 {
+    use windows_sys::core::GUID;
+    use windows_sys::Win32::NetworkManagement::IpHelper::{
+        ConvertInterfaceGuidToLuid, ConvertInterfaceLuidToIndex,
+    };
+    use windows_sys::Win32::NetworkManagement::Ndis::NET_LUID_LH;
+
+    let h: String = name.chars().filter(|c| c.is_ascii_hexdigit()).collect();
+    if h.len() != 32 {
+        return 0;
+    }
+    let p = |a: usize, b: usize| u64::from_str_radix(&h[a..b], 16).ok();
+    let (Some(d1), Some(d2), Some(d3)) = (p(0, 8), p(8, 12), p(12, 16)) else {
+        return 0;
+    };
+    let mut d4 = [0u8; 8];
+    for (i, b) in d4.iter_mut().enumerate() {
+        match p(16 + 2 * i, 18 + 2 * i) {
+            Some(v) => *b = v as u8,
+            None => return 0,
+        }
+    }
+    let guid = GUID { data1: d1 as u32, data2: d2 as u16, data3: d3 as u16, data4: d4 };
+    unsafe {
+        let mut luid: NET_LUID_LH = std::mem::zeroed();
+        if ConvertInterfaceGuidToLuid(&guid, &mut luid) != 0 {
+            return 0;
+        }
+        let mut idx = 0u32;
+        if ConvertInterfaceLuidToIndex(&luid, &mut idx) != 0 {
+            return 0;
+        }
+        idx
+    }
+}
+
 fn list_sources() -> Vec<Source> {
     let mut out = Vec::new();
     for ad in ipconfig::get_adapters().unwrap_or_default() {
@@ -125,13 +163,17 @@ fn list_sources() -> Vec<Source> {
             })
             .collect();
         let v6 = best_v6(ad.ip_addresses());
+        let i4 = guid_to_index(ad.adapter_name());
+        let i6 = ad.ipv6_if_index();
+        // индекс интерфейса один и тот же для обоих семейств; берём то, что удалось получить
+        let (idx4, idx6) = (if i4 != 0 { i4 } else { i6 }, if i6 != 0 { i6 } else { i4 });
         let mk = |v4: Option<Ipv4Addr>| Source {
             name: ad.friendly_name().to_string(),
             label: classify(&ad, v4),
             v4,
             v6,
-            idx4: ad.ipv4_if_index(),
-            idx6: ad.ipv6_if_index(),
+            idx4,
+            idx6,
         };
         if v4s.is_empty() {
             if v6.is_some() {
