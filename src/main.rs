@@ -434,7 +434,7 @@ const MENU_HTML: &str = r#"<!doctype html><meta charset="utf-8">
 <div id="ov"><div><pre id="rep"></pre><button id="ovx" class="pri">Закрыть</button></div></div>
 <script>
  const $=i=>document.getElementById(i);
- const ipc=m=>{ if(window.ipc) window.ipc.postMessage(m); else $('msg').textContent='IPC недоступен'; };
+ const post=m=>{ if(window.ipc) window.ipc.postMessage(m); else $('msg').textContent='IPC недоступен'; };
  let SRC=[],SEL=-1;
  function render(){
   const box=$('list'); box.innerHTML='';
@@ -447,8 +447,8 @@ const MENU_HTML: &str = r#"<!doctype html><meta charset="utf-8">
    t.textContent=s.label;
    const n=document.createElement('div'); n.className='nm'; n.textContent=s.name;
    d.appendChild(a); d.appendChild(t); d.appendChild(n);
-   d.onclick=()=>{SEL=i; ipc('pick|'+i); render();};
-   d.ondblclick=()=>ipc('launch');
+   d.onclick=()=>{SEL=i; post('pick|'+i); render();};
+   d.ondblclick=()=>post('launch');
    box.appendChild(d);
   });
   $('launch').disabled=SEL<0;
@@ -460,14 +460,14 @@ const MENU_HTML: &str = r#"<!doctype html><meta charset="utf-8">
  function setUrl(u){$('url').value=u}
  function showReport(t){ if(document.body.className==='menu'){$('rep').textContent=t;$('ov').style.display='flex';} else alert(t); }
  $('ovx').onclick=()=>{$('ov').style.display='none'};
- $('rf').onclick=()=>ipc('refresh'); $('chk').onclick=()=>ipc('check'); $('chk2').onclick=()=>ipc('check');
- $('launch').onclick=()=>ipc('launch'); $('chip').onclick=()=>ipc('menu');
- $('back').onclick=()=>ipc('back'); $('fwd').onclick=()=>ipc('fwd'); $('rel').onclick=()=>ipc('rel');
- $('nav').onsubmit=e=>{e.preventDefault();ipc('nav|'+$('url').value)};
+ $('rf').onclick=()=>post('refresh'); $('chk').onclick=()=>post('check'); $('chk2').onclick=()=>post('check');
+ $('launch').onclick=()=>post('launch'); $('chip').onclick=()=>post('menu');
+ $('back').onclick=()=>post('back'); $('fwd').onclick=()=>post('fwd'); $('rel').onclick=()=>post('rel');
+ $('nav').onsubmit=e=>{e.preventDefault();post('nav|'+$('url').value)};
  window.addEventListener('error',e=>{$('msg').textContent='JS: '+e.message});
  const INIT=/*INIT*/null;
  setAddrs(INIT||[],-1);
- (function boot(){ if(window.ipc) ipc('ready'); else setTimeout(boot,50); })();
+ (function boot(){ if(window.ipc) post('ready'); else setTimeout(boot,50); })();
 </script>"#;
 
 enum UserEvent {
