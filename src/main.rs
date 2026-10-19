@@ -14,14 +14,14 @@ use std::time::Duration;
 use ipconfig::{IfType, OperStatus};
 use tao::dpi::LogicalSize as TaoLogicalSize;
 use tao::event::{Event, WindowEvent};
-use tao::event_loop::{ControlFlow, EventLoopBuilder};
+use tao::event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy};
 use tao::window::{Window, WindowBuilder};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{lookup_host, TcpListener, TcpSocket, TcpStream};
 use tokio::sync::watch;
 use tokio::time::timeout;
 use wry::dpi::{LogicalPosition, LogicalSize};
-use wry::{Rect, WebView, WebViewBuilder, WebViewBuilderExtWindows};
+use wry::{NewWindowResponse, Rect, WebView, WebViewBuilder, WebViewBuilderExtWindows};
 
 // ------------------------------------------------------------------ адреса ---
 
@@ -385,7 +385,35 @@ async fn build_report(src: &Source) -> String {
 
 // --------------------------------------------------------------------- UI ---
 
-const BAR_H: f64 = 52.0;
+const TABS_H: f64 = 38.0;
+const NAV_H: f64 = 52.0;
+const BAR_H: f64 = TABS_H + NAV_H;
+
+/// Горячие клавиши. Читаем e.code, а не e.key: работает при любой раскладке (в т.ч. русской).
+const KEYS_JS: &str = r#"(function(){
+ if(window.__bbkeys) return; window.__bbkeys=1;
+ var send=function(k){ try{ window.ipc.postMessage('key|'+k); }catch(_){} };
+ window.addEventListener('keydown',function(e){
+  if(!e.isTrusted) return;
+  var c=e.ctrlKey||e.metaKey, k=e.code, a=null;
+  if(c&&!e.altKey&&!e.shiftKey){
+   if(k==='KeyT') a='newtab'; else if(k==='KeyW') a='close'; else if(k==='KeyL') a='focusurl';
+   else if(k==='KeyR') a='reload'; else if(k==='Tab'||k==='PageDown') a='next'; else if(k==='PageUp') a='prev';
+   else if(/^Digit[1-9]$/.test(k)) a='tab'+k.charAt(5);
+  } else if(c&&e.shiftKey&&!e.altKey){
+   if(k==='Tab') a='prev'; else if(k==='KeyT') a='reopen';
+  } else if(e.altKey&&!c&&!e.shiftKey){
+   if(k==='ArrowLeft') a='back'; else if(k==='ArrowRight') a='fwd';
+  } else if(!c&&!e.altKey&&!e.shiftKey&&k==='F5') a='reload';
+  if(a){ e.preventDefault(); e.stopPropagation(); send(a); }
+ },true);
+})();"#;
+
+/// Из вкладок (то есть со страниц сайтов) принимаются ТОЛЬКО эти команды-клавиши.
+const KEY_ALLOWED: &[&str] = &[
+    "newtab", "close", "reopen", "focusurl", "reload", "back", "fwd", "next", "prev",
+    "tab1", "tab2", "tab3", "tab4", "tab5", "tab6", "tab7", "tab8", "tab9",
+];
 
 const MENU_HTML: &str = r#"<!doctype html><meta charset="utf-8">
 <style>
@@ -395,7 +423,14 @@ const MENU_HTML: &str = r#"<!doctype html><meta charset="utf-8">
  button,input{font:inherit;color:inherit;background:#2b2d31;border:1px solid #4a4d55;border-radius:8px;padding:7px 12px}
  button{cursor:pointer} button:hover:not(:disabled){background:#383b41} button:disabled{opacity:.4;cursor:default}
  button.pri{background:#2f6fed;border-color:#2f6fed;color:#fff} button.pri:hover:not(:disabled){background:#4a82f0}
- body.menu #bar{display:none} body.browse #menu{display:none}
+ body.menu #chrome{display:none} body.browse #menu{display:none}
+ #tabs{display:flex;align-items:flex-end;gap:2px;height:38px;padding:6px 8px 0;background:#16171a;overflow:hidden}
+ .tab{display:flex;align-items:center;gap:6px;min-width:0;flex:0 1 210px;height:32px;padding:0 6px 0 12px;border-radius:8px 8px 0 0;background:#25262a;color:#9aa0a6;cursor:pointer}
+ .tab:hover{background:#2d2e33} .tab.on{background:#202124;color:#e8eaed}
+ .tab span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px}
+ .tab .x{padding:0 6px;border:0;background:transparent;border-radius:6px;font-size:16px;line-height:20px;color:inherit}
+ .tab .x:hover{background:#45464a}
+ #plus{align-self:center;padding:0 10px;height:28px;border:0;background:transparent;font-size:18px;line-height:24px}
  #bar{display:flex;gap:6px;align-items:center;padding:8px 10px;height:52px;background:#202124}
  #nav{display:flex;flex:1;min-width:0} #url{flex:1;min-width:0}
  #chip{white-space:nowrap;max-width:320px;overflow:hidden;text-overflow:ellipsis}
@@ -426,12 +461,16 @@ const MENU_HTML: &str = r#"<!doctype html><meta charset="utf-8">
  </div>
  <div id="msg"></div>
 </div></div>
-<div id="bar">
- <button id="back">←</button><button id="fwd">→</button><button id="rel">⟳</button>
- <form id="nav"><input id="url" placeholder="Адрес или URL" spellcheck="false"></form>
- <button id="chk2">Проверка IP</button><button id="chip" title="Сменить адрес"></button>
+<div id="chrome">
+ <div id="tabs"></div>
+ <div id="bar">
+  <button id="back">←</button><button id="fwd">→</button><button id="rel">⟳</button>
+  <form id="nav"><input id="url" placeholder="Адрес или URL" spellcheck="false"></form>
+  <button id="chk2">Проверка IP</button><button id="chip" title="Сменить адрес"></button>
+ </div>
 </div>
 <div id="ov"><div><pre id="rep"></pre><button id="ovx" class="pri">Закрыть</button></div></div>
+<script>/*KEYS*/</script>
 <script>
  const $=i=>document.getElementById(i);
  const post=m=>{ if(window.ipc) window.ipc.postMessage(m); else $('msg').textContent='IPC недоступен'; };
@@ -455,7 +494,23 @@ const MENU_HTML: &str = r#"<!doctype html><meta charset="utf-8">
   $('msg').textContent=SRC.length?('Найдено адресов: '+SRC.length):'Подходящих адресов не найдено. Нажми «Обновить список».';
  }
  function setAddrs(list,sel){SRC=list;SEL=sel;render();}
- function setMode(m,chip,full){document.body.className=m;$('chip').textContent=chip||'';$('chip').title=full||'';if(m==='browse')$('url').focus();}
+ function setTabs(list,act){
+  const t=$('tabs'); t.innerHTML='';
+  list.forEach((label,i)=>{
+   const d=document.createElement('div'); d.className='tab'+(i===act?' on':''); d.title=label;
+   const s=document.createElement('span'); s.textContent=label; d.appendChild(s);
+   const c=document.createElement('button'); c.className='x'; c.textContent='×'; c.title='Закрыть вкладку';
+   c.onclick=e=>{e.stopPropagation(); post('close|'+i);};
+   d.appendChild(c);
+   d.onclick=()=>post('tab|'+i);
+   d.onauxclick=e=>{ if(e.button===1){e.preventDefault(); post('close|'+i);} };
+   t.appendChild(d);
+  });
+  const p=document.createElement('button'); p.id='plus'; p.textContent='+'; p.title='Новая вкладка';
+  p.onclick=()=>post('newtab'); t.appendChild(p);
+ }
+ function setMode(m,chip,full){document.body.className=m;$('chip').textContent=chip||'';$('chip').title=full||'';}
+ function focusUrl(){const u=$('url');u.focus();u.select();}
  function setMsg(t){$('msg').textContent=t}
  function setUrl(u){$('url').value=u}
  function showReport(t){ if(document.body.className==='menu'){$('rep').textContent=t;$('ov').style.display='flex';} else alert(t); }
@@ -470,9 +525,18 @@ const MENU_HTML: &str = r#"<!doctype html><meta charset="utf-8">
  (function boot(){ if(window.ipc) post('ready'); else setTimeout(boot,50); })();
 </script>"#;
 
+struct Tab {
+    id: u32,
+    view: WebView,
+    title: String,
+    url: String,
+}
+
 enum UserEvent {
     Ipc(String),
-    Url(String),
+    Url(u32, String),
+    Title(u32, String),
+    NewTab(String),
     Report(String),
 }
 
@@ -480,17 +544,154 @@ fn js(s: &str) -> String {
     serde_json::to_string(s).unwrap()
 }
 
-fn layout(window: &Window, tb: &WebView, ct: &WebView, menu: bool) {
+fn content_rect(window: &Window) -> Rect {
+    let s = window.inner_size().to_logical::<f64>(window.scale_factor());
+    Rect {
+        position: LogicalPosition::new(0.0, BAR_H).into(),
+        size: LogicalSize::new(s.width, (s.height - BAR_H).max(1.0)).into(),
+    }
+}
+
+fn layout(window: &Window, tb: &WebView, tabs: &[Tab], menu: bool) {
     let s = window.inner_size().to_logical::<f64>(window.scale_factor());
     let tb_h = if menu { s.height.max(1.0) } else { BAR_H };
     let _ = tb.set_bounds(Rect {
         position: LogicalPosition::new(0.0, 0.0).into(),
         size: LogicalSize::new(s.width, tb_h).into(),
     });
-    let _ = ct.set_bounds(Rect {
-        position: LogicalPosition::new(0.0, BAR_H).into(),
-        size: LogicalSize::new(s.width, (s.height - BAR_H).max(1.0)).into(),
-    });
+    for t in tabs {
+        let _ = t.view.set_bounds(content_rect(window));
+    }
+}
+
+/// Одна вкладка = один WebView. Новые окна (target=_blank, window.open) уходят в новую вкладку.
+fn make_tab(
+    window: &Window,
+    args: &str,
+    proxy: &EventLoopProxy<UserEvent>,
+    id: u32,
+    url: &str,
+) -> WebView {
+    let (p_nav, p_title, p_new, p_key) =
+        (proxy.clone(), proxy.clone(), proxy.clone(), proxy.clone());
+    WebViewBuilder::new()
+        .with_bounds(content_rect(window))
+        .with_additional_browser_args(args.to_string())
+        .with_url(url)
+        .with_initialization_script(KEYS_JS)
+        .with_ipc_handler(move |req| {
+            // страницы сайтов тоже видят window.ipc: пропускаем только белый список клавиш
+            let b = req.body();
+            if let Some(k) = b.strip_prefix("key|") {
+                if KEY_ALLOWED.contains(&k) {
+                    let _ = p_key.send_event(UserEvent::Ipc(b.clone()));
+                }
+            }
+        })
+        .with_navigation_handler(move |u| {
+            let _ = p_nav.send_event(UserEvent::Url(id, u));
+            true
+        })
+        .with_document_title_changed_handler(move |t| {
+            let _ = p_title.send_event(UserEvent::Title(id, t));
+        })
+        .with_new_window_req_handler(move |u, _features| {
+            let _ = p_new.send_event(UserEvent::NewTab(u));
+            NewWindowResponse::Deny
+        })
+        .build_as_child(window)
+        .unwrap()
+}
+
+fn open_tab(
+    window: &Window,
+    args: &str,
+    proxy: &EventLoopProxy<UserEvent>,
+    tabs: &mut Vec<Tab>,
+    active: &mut usize,
+    next_id: &mut u32,
+    url: &str,
+) {
+    let id = *next_id;
+    *next_id += 1;
+    let view = make_tab(window, args, proxy, id, url);
+    let shown = if url.starts_with("about:") { String::new() } else { url.to_string() };
+    tabs.push(Tab { id, view, title: String::new(), url: shown });
+    *active = tabs.len() - 1;
+}
+
+fn sync_views(tabs: &[Tab], active: usize, menu: bool) {
+    for (i, t) in tabs.iter().enumerate() {
+        let _ = t.view.set_visible(!menu && i == active);
+    }
+}
+
+fn tab_label(t: &Tab) -> String {
+    if !t.title.is_empty() {
+        t.title.clone()
+    } else if !t.url.is_empty() {
+        t.url.clone()
+    } else {
+        "Новая вкладка".to_string()
+    }
+}
+
+fn push_tabs(tb: &WebView, tabs: &[Tab], active: usize) {
+    let labels: Vec<String> = tabs.iter().map(tab_label).collect();
+    let _ = tb.evaluate_script(&format!(
+        "setTabs({},{})",
+        serde_json::to_string(&labels).unwrap(),
+        active
+    ));
+}
+
+fn set_win_title(window: &Window, tabs: &[Tab], active: usize, menu: bool) {
+    let t = match (menu, tabs.get(active)) {
+        (false, Some(t)) => format!("{} — Bound Browser", tab_label(t)),
+        _ => "Bound Browser".to_string(),
+    };
+    window.set_title(&t);
+}
+
+/// Перерисовать полосу вкладок, строку адреса и заголовок окна под активную вкладку.
+fn refresh_chrome(window: &Window, tb: &WebView, tabs: &[Tab], active: usize, menu: bool) {
+    push_tabs(tb, tabs, active);
+    let url = tabs.get(active).map(|t| t.url.clone()).unwrap_or_default();
+    let _ = tb.evaluate_script(&format!("setUrl({})", js(&url)));
+    set_win_title(window, tabs, active, menu);
+}
+
+/// Перевести клавиатурный фокус в строку адреса (она живёт в панели, а не в странице).
+fn focus_url(tb: &WebView) {
+    let _ = tb.focus();
+    let _ = tb.evaluate_script("focusUrl()");
+}
+
+fn urlenc(s: &str) -> String {
+    s.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => (b as char).to_string(),
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
+}
+
+/// Адрес как есть / https://хост / поиск DuckDuckGo, если это не похоже на адрес.
+fn normalize_input(raw: &str) -> String {
+    let t = raw.trim();
+    if t.is_empty() {
+        return "about:blank".into();
+    }
+    if t.contains("://") || t.starts_with("about:") {
+        return t.to_string();
+    }
+    let looks_host = !t.contains(char::is_whitespace)
+        && (t.contains('.') || t.starts_with("localhost") || t.starts_with('['));
+    if looks_host {
+        format!("https://{t}")
+    } else {
+        format!("https://duckduckgo.com/?q={}", urlenc(t))
+    }
 }
 
 fn sources_json(sources: &[Source]) -> serde_json::Value {
@@ -534,7 +735,7 @@ fn main() {
     }
     let rt_handle = rt.handle().clone();
 
-    // Один и тот же набор аргументов для обоих WebView (иначе WebView2 ругается на конфликт окружений).
+    // Один и тот же набор аргументов для всех WebView (иначе WebView2 ругается на конфликт окружений).
     let args = format!(
         "--proxy-server=http://127.0.0.1:{port} --disable-quic \
          --force-webrtc-ip-handling-policy=disable_non_proxied_udp --dns-prefetch-disable \
@@ -544,7 +745,7 @@ fn main() {
     // Список адресов зашиваем прямо в HTML: меню не зависит от IPC при старте.
     let mut sources: Vec<Source> = list_sources();
     let init = sources_json(&sources).to_string().replace("</", "<\\/");
-    let html = MENU_HTML.replace("/*INIT*/null", &init);
+    let html = MENU_HTML.replace("/*INIT*/null", &init).replace("/*KEYS*/", KEYS_JS);
 
     let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
     let proxy = event_loop.create_proxy();
@@ -569,42 +770,81 @@ fn main() {
         .build_as_child(&window)
         .unwrap();
 
-    let p_nav = proxy.clone();
-    let content = WebViewBuilder::new()
-        .with_bounds(Rect {
-            position: LogicalPosition::new(0.0, BAR_H).into(),
-            size: LogicalSize::new(init_size.width, (init_size.height - BAR_H).max(1.0)).into(),
-        })
-        .with_additional_browser_args(args)
-        .with_url("about:blank")
-        .with_navigation_handler(move |u| {
-            let shown = if u.starts_with("about:") { String::new() } else { u };
-            let _ = p_nav.send_event(UserEvent::Url(shown));
-            true
-        })
-        .build_as_child(&window)
-        .unwrap();
-    let _ = content.set_visible(false); // сначала меню выбора, браузер скрыт
-
+    // Вкладок нет, пока не выбран адрес: первая вкладка создаётся при запуске.
+    let mut tabs: Vec<Tab> = Vec::new();
+    let mut active: usize = 0;
+    let mut next_id: u32 = 0;
     let mut selected: Option<usize> = None;
     let mut menu = true;
-    let mut launched = false;
+    let mut closed: Vec<String> = Vec::new();
 
     event_loop.run(move |event, _, flow| {
         *flow = ControlFlow::Wait;
         match event {
             Event::WindowEvent { event: WindowEvent::CloseRequested, .. } => *flow = ControlFlow::Exit,
             Event::WindowEvent { event: WindowEvent::Resized(_), .. } => {
-                layout(&window, &toolbar, &content, menu)
+                layout(&window, &toolbar, &tabs, menu)
             }
-            Event::UserEvent(UserEvent::Url(u)) => {
-                let _ = toolbar.evaluate_script(&format!("setUrl({})", js(&u)));
+            Event::UserEvent(UserEvent::Url(id, u)) => {
+                let shown = if u.starts_with("about:") { String::new() } else { u };
+                if let Some(pos) = tabs.iter().position(|t| t.id == id) {
+                    tabs[pos].url = shown.clone();
+                    if pos == active {
+                        let _ = toolbar.evaluate_script(&format!("setUrl({})", js(&shown)));
+                    }
+                    push_tabs(&toolbar, &tabs, active);
+                }
+            }
+            Event::UserEvent(UserEvent::Title(id, t)) => {
+                if let Some(tab) = tabs.iter_mut().find(|x| x.id == id) {
+                    tab.title = t;
+                    push_tabs(&toolbar, &tabs, active);
+                    set_win_title(&window, &tabs, active, menu);
+                }
+            }
+            Event::UserEvent(UserEvent::NewTab(u)) => {
+                if !menu {
+                    open_tab(&window, &args, &proxy, &mut tabs, &mut active, &mut next_id, &u);
+                    sync_views(&tabs, active, menu);
+                    refresh_chrome(&window, &toolbar, &tabs, active, menu);
+                }
             }
             Event::UserEvent(UserEvent::Report(r)) => {
                 let _ = toolbar.evaluate_script(&format!("showReport({})", js(&r)));
             }
             Event::UserEvent(UserEvent::Ipc(msg)) => {
                 let (cmd, arg) = msg.split_once('|').unwrap_or((msg.as_str(), ""));
+                // горячие клавиши превращаем в обычные команды (в меню игнорируем)
+                let n = tabs.len().max(1);
+                let mapped: Option<String> = if cmd == "key" {
+                    Some(if menu {
+                        String::new()
+                    } else {
+                        match arg {
+                            "newtab" => "newtab".into(),
+                            "close" => format!("close|{active}"),
+                            "reopen" => "reopen".into(),
+                            "focusurl" => "focusurl".into(),
+                            "reload" => "rel".into(),
+                            "back" => "back".into(),
+                            "fwd" => "fwd".into(),
+                            "next" => format!("tab|{}", (active + 1) % n),
+                            "prev" => format!("tab|{}", (active + n - 1) % n),
+                            t if t.starts_with("tab") => {
+                                let k = t[3..].parse::<usize>().unwrap_or(1).max(1);
+                                let i = if k == 9 { n - 1 } else { k - 1 };
+                                format!("tab|{i}")
+                            }
+                            _ => String::new(),
+                        }
+                    })
+                } else {
+                    None
+                };
+                let (cmd, arg) = match &mapped {
+                    Some(m) => m.split_once('|').unwrap_or((m.as_str(), "")),
+                    None => (cmd, arg),
+                };
                 match cmd {
                     "ready" | "refresh" => {
                         let prev = selected.map(|i| sources[i].clone());
@@ -621,8 +861,16 @@ fn main() {
                             *state.lock().unwrap() = Some(s.clone());
                             gen_tx.send_modify(|g| *g += 1);
                             menu = false;
-                            layout(&window, &toolbar, &content, menu);
-                            let _ = content.set_visible(true);
+                            if tabs.is_empty() {
+                                open_tab(&window, &args, &proxy, &mut tabs, &mut active, &mut next_id, "about:blank");
+                            } else {
+                                // адрес сменили: перезагружаем все вкладки через новый адаптер
+                                for t in &tabs {
+                                    let _ = t.view.evaluate_script("location.reload()");
+                                }
+                            }
+                            sync_views(&tabs, active, menu);
+                            layout(&window, &toolbar, &tabs, menu);
                             let ip = s
                                 .v4
                                 .map(|a| a.to_string())
@@ -634,10 +882,8 @@ fn main() {
                                 js(&format!("🟢 {ip} · {kind}")),
                                 js(&format!("{}\nНажми, чтобы сменить адрес", s.title()))
                             ));
-                            if launched {
-                                let _ = content.evaluate_script("location.reload()");
-                            }
-                            launched = true;
+                            refresh_chrome(&window, &toolbar, &tabs, active, menu);
+                            focus_url(&toolbar);
                         }
                         None => {
                             let _ = toolbar.evaluate_script("setMsg('Сначала выбери адрес.')");
@@ -648,31 +894,80 @@ fn main() {
                         *state.lock().unwrap() = None;
                         gen_tx.send_modify(|g| *g += 1);
                         menu = true;
-                        let _ = content.set_visible(false);
-                        layout(&window, &toolbar, &content, menu);
+                        sync_views(&tabs, active, menu);
+                        layout(&window, &toolbar, &tabs, menu);
                         let _ = toolbar.evaluate_script("setMode('menu','','')");
+                        set_win_title(&window, &tabs, active, menu);
                     }
-                    "nav" => {
-                        let mut u = arg.trim().to_string();
-                        if !u.contains("://") {
-                            u = format!("https://{u}");
+                    "newtab" => {
+                        if !menu {
+                            open_tab(&window, &args, &proxy, &mut tabs, &mut active, &mut next_id, "about:blank");
+                            sync_views(&tabs, active, menu);
+                            refresh_chrome(&window, &toolbar, &tabs, active, menu);
+                            focus_url(&toolbar);
                         }
-                        let _ = content.load_url(&u);
+                    }
+                    "tab" => {
+                        if let Some(i) = arg.parse::<usize>().ok().filter(|i| *i < tabs.len()) {
+                            active = i;
+                            sync_views(&tabs, active, menu);
+                            refresh_chrome(&window, &toolbar, &tabs, active, menu);
+                            let _ = tabs[active].view.focus();
+                        }
+                    }
+                    "close" => {
+                        if let Some(i) = arg.parse::<usize>().ok().filter(|i| *i < tabs.len()) {
+                            if !tabs[i].url.is_empty() {
+                                closed.push(tabs[i].url.clone());
+                            }
+                            tabs.remove(i);
+                            if tabs.is_empty() {
+                                open_tab(&window, &args, &proxy, &mut tabs, &mut active, &mut next_id, "about:blank");
+                            } else if i < active || active >= tabs.len() {
+                                active = active.saturating_sub(1).min(tabs.len() - 1);
+                            }
+                            sync_views(&tabs, active, menu);
+                            refresh_chrome(&window, &toolbar, &tabs, active, menu);
+                        }
+                    }
+                    "reopen" => {
+                        if let Some(u) = closed.pop() {
+                            open_tab(&window, &args, &proxy, &mut tabs, &mut active, &mut next_id, &u);
+                            sync_views(&tabs, active, menu);
+                            refresh_chrome(&window, &toolbar, &tabs, active, menu);
+                        }
+                    }
+                    "focusurl" => focus_url(&toolbar),
+                    "nav" => {
+                        let u = normalize_input(arg);
+                        if let Some(t) = tabs.get(active) {
+                            let _ = t.view.load_url(&u);
+                            let _ = t.view.focus();
+                        }
                     }
                     "back" => {
-                        let _ = content.evaluate_script("history.back()");
+                        if let Some(t) = tabs.get(active) {
+                            let _ = t.view.evaluate_script("history.back()");
+                        }
                     }
                     "fwd" => {
-                        let _ = content.evaluate_script("history.forward()");
+                        if let Some(t) = tabs.get(active) {
+                            let _ = t.view.evaluate_script("history.forward()");
+                        }
                     }
                     "rel" => {
-                        let _ = content.evaluate_script("location.reload()");
+                        if let Some(t) = tabs.get(active) {
+                            let _ = t.view.evaluate_script("location.reload()");
+                        }
                     }
                     "check" => match selected {
                         Some(i) => {
                             let src = sources[i].clone();
                             if !menu {
-                                let _ = content.load_url("https://api64.ipify.org/");
+                                // страница с IP открывается в новой вкладке, чтобы не терять текущую
+                                open_tab(&window, &args, &proxy, &mut tabs, &mut active, &mut next_id, "https://api64.ipify.org/");
+                                sync_views(&tabs, active, menu);
+                                refresh_chrome(&window, &toolbar, &tabs, active, menu);
                             }
                             let p = proxy.clone();
                             rt_handle.spawn(async move {
