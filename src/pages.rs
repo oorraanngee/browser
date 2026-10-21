@@ -41,6 +41,27 @@ kbd{font:12px Consolas,monospace;background:#2b2d31;border:1px solid #4a4d55;bor
 .state{font-size:12px;padding:2px 8px;border-radius:999px;background:#22392a;color:#9be3a2}
 .state.running{background:#3d2f12;color:#f3c767} .state.failed{background:#40201f;color:#f2958f}
 .empty{color:var(--mut);padding:24px 0}
+
+.wrap{animation:in .35s ease both} .row{animation:in .35s ease both}
+@keyframes in{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+.nt>*{animation:in .5s ease both} .nt>*:nth-child(2){animation-delay:.08s} .nt>*:nth-child(3){animation-delay:.16s}
+button,select,.tile .ic,.row{transition:background .15s,border-color .15s,transform .15s}
+button:active{transform:scale(.97)} .tile:hover .ic{transform:translateY(-3px);border-color:var(--acc)}
+.hero{text-align:center;padding:30px 0 22px}
+.logo2{font-size:58px;font-weight:200;letter-spacing:.2em;background:linear-gradient(135deg,hsl(var(--h) 90% 72%),hsl(calc(var(--h) + 60) 90% 64%));-webkit-background-clip:text;background-clip:text;color:transparent;animation:in .6s ease both}
+.ver{position:relative;overflow:hidden;margin:10px 0 8px;padding:8px 20px;border-radius:999px;border:1px solid var(--line);background:var(--panel);cursor:pointer;user-select:none;font-size:14px}
+.ver:hover{border-color:var(--acc)}
+.ver.hit{animation:squish .28s cubic-bezier(.3,1.6,.5,1)}
+@keyframes squish{0%{transform:scale(.9)}60%{transform:scale(1.05)}100%{transform:scale(1)}}
+.rip{position:absolute;width:12px;height:12px;margin:-6px 0 0 -6px;border-radius:50%;background:rgba(90,169,255,.55);animation:rip .65s ease-out forwards;pointer-events:none}
+@keyframes rip{to{transform:scale(22);opacity:0}}
+.box{background:var(--panel);border:1px solid var(--line);border-radius:14px;overflow:hidden}
+.kv{display:flex;gap:14px;justify-content:space-between;padding:11px 16px;border-bottom:1px solid var(--line);animation:in .35s ease both}
+.kv:last-child{border-bottom:0} .kv .k{color:var(--mut)} .kv .val{text-align:right;word-break:break-all}
+#toast{position:fixed;left:50%;bottom:34px;transform:translate(-50%,16px);opacity:0;padding:10px 18px;border-radius:12px;background:#2b2d33;border:1px solid #44474f;transition:.28s;pointer-events:none;z-index:20}
+#toast.on{opacity:1;transform:translate(-50%,0)}
+body{transition:opacity .6s ease,filter .6s ease} body.fade{opacity:0;filter:blur(6px)}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 </style></head>
 <body><div id="app"></div>
 <script>
@@ -149,14 +170,27 @@ function downloads(r){
 }
 
 /* ---------- о программе ---------- */
+function toast(t){let e=$('#toast');if(!e){e=el('div');e.id='toast';document.body.append(e)}e.textContent=t;e.classList.remove('on');void e.offsetWidth;e.classList.add('on');clearTimeout(e.__t);e.__t=setTimeout(()=>e.classList.remove('on'),1800)}
 function about(r){
  document.title='О atmo';r.innerHTML='';
- const w=el('div','wrap');w.append(el('h1','','atmo'));
- const v=el('div','','Версия '+S.version);v.style.cssText='cursor:default;user-select:none;display:inline-block';
+ const w=el('div','wrap');
+ const hero=el('div','hero');hero.append(el('div','logo2','atmo'));
+ const v=el('button','ver','Версия '+S.version);
+ hero.append(v,el('div','d','Браузер, который сам выбирает, откуда выходить в сеть.'));w.append(hero);
  let n=0,t=0;
- v.onclick=()=>{const now=Date.now();n=now-t<900?n+1:1;t=now;if(n>=7){n=0;orbit()}};
- w.append(v);
- w.append(el('div','d','Движок страниц: WebView2. Сеть: собственный локальный прокси.'));
+ v.onclick=ev=>{
+  const now=Date.now();n=now-t<900?n+1:1;t=now;
+  const rp=el('span','rip'),b=v.getBoundingClientRect();rp.style.left=(ev.clientX-b.left)+'px';rp.style.top=(ev.clientY-b.top)+'px';v.append(rp);setTimeout(()=>rp.remove(),650);
+  v.classList.remove('hit');void v.offsetWidth;v.classList.add('hit');
+  if(n>=3&&n<7){const k=7-n;toast('Ещё '+k+' '+(k===1?'нажатие':k<5?'нажатия':'нажатий')+'…')}
+  if(n>=7){n=0;toast('Спускаемся…');document.body.classList.add('fade');setTimeout(()=>location.href='/play',700)}
+ };
+ const ua=navigator.userAgent,cm=(ua.match(/Edg\/([\d.]+)/)||ua.match(/Chrome\/([\d.]+)/)||[])[1]||'?';
+ const sys=(navigator.userAgentData&&navigator.userAgentData.platform)||navigator.platform||'Windows';
+ const rows=[['Движок страниц','WebView2 (Chromium '+cm+')'],['Система',sys],['Режим',S.settings.mode==='advanced'?'Изоляция сети':'Обычный браузер'],['Сетевой маршрут',S.route||'—'],['Закладок',String(S.bookmarks.length)],['Данные',S.dir||'—']];
+ const card=el('div','box');rows.forEach(([k,val],i)=>{const rw=el('div','kv');rw.style.animationDelay=(i*50)+'ms';rw.append(el('span','k',k),el('span','val',val));card.append(rw)});
+ w.append(card);
+ const f=el('div','d','Страницы atmo отдаёт собственный локальный прокси, поэтому они работают, даже когда сеть закрыта.');f.style.marginTop='16px';w.append(f);
  r.append(w);
 }
 
@@ -165,40 +199,6 @@ const K='ArrowUp,ArrowUp,ArrowDown,ArrowDown,ArrowLeft,ArrowRight,ArrowLeft,Arro
 let ki=0;
 addEventListener('keydown',e=>{ki=e.code===K[ki]?ki+1:(e.code===K[0]?1:0);if(ki===K.length){ki=0;document.body.classList.toggle('aurora')}});
 
-function orbit(){
- if($('.ov'))return;
- const ov=el('div','ov'),c=el('canvas'),b=el('button','','Закрыть (Esc)'),hint=el('div','d','Пробел или клик: сменить орбиту');
- c.width=c.height=480;ov.append(el('div','big','ORBIT'),c,hint,b);document.body.append(ov);
- const g=c.getContext('2d'),R=[85,150],C=240,TAU=Math.PI*2;
- let lane=0,a=0,score=0,best=+localStorage.getItem('atmo.orbit')||0,rocks=[],last=performance.now(),sp=0,dead=false,raf=0;
- const reset=()=>{lane=0;a=0;score=0;rocks=[];dead=false;sp=0};
- const flip=()=>{if(dead)reset();else lane^=1};
- const close=()=>{cancelAnimationFrame(raf);removeEventListener('keydown',kd);ov.remove()};
- const kd=e=>{if(e.code==='Escape')close();else if(e.code==='Space'||e.code==='ArrowUp'||e.code==='ArrowDown'){e.preventDefault();flip()}};
- const dist=(x,y)=>{let z=(x-y)%TAU;if(z>Math.PI)z-=TAU;if(z<-Math.PI)z+=TAU;return Math.abs(z)};
- b.onclick=close;c.onclick=flip;addEventListener('keydown',kd);
- function tick(now){
-  const dt=Math.min(.05,(now-last)/1000);last=now;
-  if(!dead){
-   a+=dt*1.6;score+=dt;sp-=dt;
-   if(sp<=0){sp=Math.max(.4,1.3-score*.02);rocks.push({l:Math.random()<.5?0:1,a:a+Math.PI*(1.1+Math.random()*.6),v:(Math.random()<.5?-1:1)*(.4+Math.random()*.6),t:9})}
-   rocks.forEach(r=>{r.a+=r.v*dt;r.t-=dt;if(r.l===lane&&dist(r.a,a)<.17)dead=true});
-   rocks=rocks.filter(r=>r.t>0);
-   if(dead){best=Math.max(best,Math.floor(score));localStorage.setItem('atmo.orbit',best)}
-  }
-  g.clearRect(0,0,480,480);
-  const gr=g.createRadialGradient(C,C,8,C,C,56);gr.addColorStop(0,'#7cc0ff');gr.addColorStop(1,'#2b5fd6');
-  g.fillStyle=gr;g.beginPath();g.arc(C,C,46,0,TAU);g.fill();
-  g.strokeStyle='#2a2e36';R.forEach(r=>{g.beginPath();g.arc(C,C,r,0,TAU);g.stroke()});
-  g.fillStyle='#8a93a3';rocks.forEach(r=>{g.beginPath();g.arc(C+Math.cos(r.a)*R[r.l],C+Math.sin(r.a)*R[r.l],8,0,TAU);g.fill()});
-  g.fillStyle=dead?'#ff6b6b':'#fff';g.beginPath();g.arc(C+Math.cos(a)*R[lane],C+Math.sin(a)*R[lane],7,0,TAU);g.fill();
-  g.fillStyle='#e8eaed';g.font='16px Segoe UI';
-  g.fillText((dead?'Столкновение! ':'')+Math.floor(score)+'  ·  рекорд '+best,14,26);
-  if(dead)g.fillText('Пробел: заново',14,48);
-  raf=requestAnimationFrame(tick);
- }
- raf=requestAnimationFrame(tick);
-}
 
 load();
 if(view==='downloads')setInterval(load,1500);
