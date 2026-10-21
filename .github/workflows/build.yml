@@ -23,5 +23,5 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: bound-browser-windows
-          path: target/release/bound-browser.exe
+          name: atmo-windows
+          path: target/release/atmo.exe
