@@ -52,6 +52,7 @@ pub struct App {
     pub downloads: Vec<Download>,
     pub next_dl: u32,
     pub session: (Vec<String>, usize),
+    pub route: String,
 }
 
 impl App {
@@ -75,7 +76,7 @@ impl App {
             }
             None => (Vec::new(), 0),
         };
-        App { settings, bookmarks, downloads: Vec::new(), next_dl: 1, session }
+        App { settings, bookmarks, downloads: Vec::new(), next_dl: 1, session, route: "Закрыта".to_string() }
     }
 
     fn default_of(k: &str) -> bool {
@@ -205,6 +206,8 @@ impl App {
             "downloads": downloads,
             "keymap": keymap(),
             "version": VERSION,
+            "route": self.route,
+            "dir": dir().to_string_lossy().to_string(),
             "defaults": { "newtab_page": true, "accel_keys": true },
         })
     }
