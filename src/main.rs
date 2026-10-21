@@ -6,6 +6,7 @@
 //! сокеты с bind() на выбранный адрес + принудительной привязкой к интерфейсу
 //! (IP_UNICAST_IF / IPV6_UNICAST_IF). Любая ошибка = соединение закрыто (fail-closed).
 
+mod game;
 mod pages;
 mod store;
 
@@ -400,6 +401,9 @@ async fn internal(
         let text = String::from_utf8_lossy(&body).to_string();
         let out = api_call(api, method, &text, ctx);
         return respond(c, 200, "application/json; charset=utf-8", out.to_string().as_bytes()).await;
+    }
+    if route_path == "/play" {
+        return respond(c, 200, "text/html; charset=utf-8", game::GAME_HTML.as_bytes()).await;
     }
     respond(c, 200, "text/html; charset=utf-8", pages::PAGES_HTML.as_bytes()).await
 }
@@ -1328,6 +1332,11 @@ fn main() {
                         match route {
                             Some(route) => {
                                 *net.lock().unwrap() = route.clone();
+                                app.lock().unwrap().route = match &route {
+                                    Route::Bound(s) => format!("Через адаптер «{}»", s.name),
+                                    Route::Direct => "Обычный маршрут".to_string(),
+                                    Route::Closed => "Закрыта".to_string(),
+                                };
                                 gen_tx.send_modify(|g| *g += 1);
                                 menu = false;
                                 let (show, remember) = {
@@ -1401,6 +1410,7 @@ fn main() {
                     "menu" => {
                         // возвращаясь в меню, закрываем сеть (fail-closed) и рвём соединения
                         *net.lock().unwrap() = Route::Closed;
+                        app.lock().unwrap().route = "Закрыта".to_string();
                         gen_tx.send_modify(|g| *g += 1);
                         menu = true;
                         sync_views(&tabs, active, menu);
@@ -1488,7 +1498,7 @@ fn main() {
                         }
                         rc!();
                     }
-                    "bookmarks" | "downloads" | "settings" => {
+                    "bookmarks" | "downloads" | "settings" | "about" => {
                         let url = format!("http://atmo.internal/{cmd}");
                         if let Some(i) = tabs.iter().position(|t| t.raw == url) {
                             active = i;
